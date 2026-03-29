@@ -1,0 +1,32 @@
+# Data (too large for git)
+data/
+allen_vbn_cache/
+*.nwb
+
+# Extracted spike matrices (large numpy arrays, regenerable)
+results/spike_matrices/
+
+# Keep decoding results, figures, and multi-session summaries tracked
+# results/decoding/
+# results/multi_session/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+vbn_env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Interim files (saved mid-run, replaced by final output)
+*_interim.json

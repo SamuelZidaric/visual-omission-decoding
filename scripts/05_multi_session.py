@@ -482,7 +482,7 @@ def aggregate_results(session_results):
           f"{'VISp':>6s}  {'VISam':>6s}  {'Diff':>7s}")
     print(f"  {'-'*80}")
     for row in summary["session_table"]:
-        print(f"  {row['session_id']:>12d}  {row['genotype']:>6s}  {row['mouse_id']:>8s}  "
+        print(f"  {row['session_id']:>12d}  {row['genotype']:>6s}  {str(row['mouse_id']):>8s}  "
               f"{row['n_units_VISp']:>6d}  {row['n_units_VISam']:>7d}  {row['n_omissions']:>5d}  "
               f"{row['VISp_accuracy']:>6.3f}  {row['VISam_accuracy']:>6.3f}  "
               f"{row['diff']:>+7.3f}")

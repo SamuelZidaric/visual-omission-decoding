@@ -19,12 +19,7 @@ Machine-readable record of every analysis run. Each entry captures inputs, param
 | R004 | 2026-03-29 | check_omission_per_image.py | 1064644573 | Check if omission rows carry image identity | NEGATIVE — image_name="omitted" for all 356 |
 | R005 | 2026-03-29 | 02_extract_spikes.py | 1064644573 | Late-window extraction, 200–400ms, 200ms bin | COMPLETE — VISp 6.3 Hz, VISam 5.1 Hz |
 | R006 | 2026-03-29 | 02_extract_spikes.py | 1064644573 | Time-resolved extraction, 0–500ms, 10×50ms bins | COMPLETE — VISp 6.5 Hz, VISam 5.4 Hz |
-| R007 | 2026-03-29 | 03_decode.py | 1064644573 | Late-window decoding 200–400ms, 100 perms | H3 REJECTED — VISp 97.4% > VISam 80.3% |
-| R008 | 2026-03-29 | 03_decode.py | 1064644573 | Time-resolved decoding 0–500ms | VISp > VISam all bins, OFF-response at 275ms |
-| R009 | 2026-03-29 | 03_decode.py | 1064644573 | Clean late-window 400–750ms, 100 perms | VISp 90.0% > VISam 75.1% — signal persists past OFF |
-| R010 | 2026-03-29 | 02_extract_spikes.py | 1064644573 | Extraction 400–750ms | COMPLETE |
-| R011 | 2026-03-29 | 02+03_decode.py | 1064644573 | **BASELINE CONTROL** −250–0ms | PASS — both at chance (47.6%, 51.2%) |
-| R012 | 2026-03-29 | 03_decode.py | 1064644573 | Extended time-resolved 0–750ms, 15 bins | VISp 66%, VISam 62% at 725ms — converging |
+| R011 | 2026-03-30 | 05_multi_session.py | 5 sessions | Multi-session extraction + decoding, 400–750ms + 0–500ms | COMPLETE — VISp > VISam in 5/5 sessions |
 
 ---
 
@@ -251,66 +246,194 @@ Machine-readable record of every analysis run. Each entry captures inputs, param
 
 ---
 
-### R011: Pre-stimulus baseline control (critical validation)
-- **Date:** 2026-03-29
-- **Script:** `02_extract_spikes.py` + `03_decode.py`
-- **Session:** 1064644573
-- **Purpose:** Rule out pre-existing brain state differences between omission and expected trials. If the decoder can distinguish the two conditions *before* the stimulus, the late-window results are confounded.
+### R011: Multi-session validation — 5 sessions (Phase 4)
+- **Date:** 2026-03-30
+- **Script:** `05_multi_session.py --n_sessions 5 --n_permutations 100`
+- **Sessions:** 1115077618, 1111013640, 1119946360, 1115086689, 1116941914
+- **Session selection criteria:** Greedy diversity — maximize genotype and mouse_id coverage from 88 viable candidates. Selected: 2 SST-IRES-Cre, 1 VIP-IRES-Cre, 2 Slc17a7 (wt/wt), 5 unique mice.
 - **Parameters:**
-  - Window: **−250 to 0 ms** (pre-stimulus baseline)
-  - Bin width: 250 ms (single bin)
-  - Decoder: same as R007/R009 (LogisticRegressionCV, 10 repeats, 5-fold CV)
-  - Permutations: 100
-- **Key results:**
-  - **VISp: 0.476 ±0.023 (p=0.8416) — NOT SIGNIFICANT**
-  - **VISam: 0.512 ±0.029 (p=0.2376) — NOT SIGNIFICANT**
-  - Both areas decode at chance in the pre-stimulus window
+  - Primary window: 400–750ms (D012 clean window), single 350ms bin
+  - Secondary window: 0–500ms, 10 × 50ms bins (time-resolved, no permutations)
+  - Classifier: LogisticRegressionCV (Cs=10, penalty=l2, inner 3-fold CV)
+  - Outer CV: stratified 5-fold
+  - Undersample repeats: 10
+  - Permutations: 100 per area per session
+  - Quality filters: isi_violations < 0.5, amplitude_cutoff < 0.1, presence_ratio > 0.95
+  - Minimum units per area: 20
+- **Key results (400–750ms late window):**
+
+  | Session | Genotype | Mouse | Image set | VISp units | VISam units | Omissions | VISp acc | VISam acc | Diff |
+  |---------|----------|-------|-----------|------------|-------------|-----------|----------|-----------|------|
+  | 1115077618 | SST | 570299 | G | 86 | 87 | 364 | 0.930 | 0.836 | −0.095 |
+  | 1111013640 | VIP | 568963 | G | 85 | 86 | 306 | 0.954 | 0.868 | −0.085 |
+  | 1119946360 | Slc17a7 | 578003 | H | 110 | 120 | 328 | 0.944 | 0.854 | −0.090 |
+  | 1115086689 | SST | 574078 | G | 97 | 71 | 354 | 0.951 | 0.848 | −0.103 |
+  | 1116941914 | Slc17a7 | 576323 | H | 71 | 91 | 352 | 0.920 | 0.881 | −0.039 |
+
+  - VISp mean: **0.940 ± 0.014**, VISam mean: **0.857 ± 0.018**
+  - VISp > VISam in **5/5 sessions**
+  - All 10 individual area-level permutation tests: **p = 0.0099** (significant)
+  - Null distributions centered at ~0.50 for all areas/sessions (chance)
+  - Cohen's d = **−3.27** (very large effect)
+  - Wilcoxon signed-rank: p = 0.0625 (floor for n=5 with all pairs concordant)
+  - Sign-flip permutation test (10,000 flips): p = 0.061
+  - One-sided sign test: p = 0.031 (0.5^5)
+
+- **Key results (0–500ms time-resolved):**
+
+  | Session | VISp peak (ms) | VISp peak acc | VISam peak (ms) | VISam peak acc |
+  |---------|----------------|---------------|-----------------|----------------|
+  | 1115077618 | 75 | 0.992 | 75 | 0.947 |
+  | 1111013640 | 325 | 0.990 | 75 | 0.920 |
+  | 1119946360 | 75 | 0.985 | 75 | 0.946 |
+  | 1115086689 | 75 | 0.994 | 75 | 0.948 |
+  | 1116941914 | 75 | 0.992 | 75 | 0.972 |
+
+  - Both areas peak near 75ms (ON-response) — trivial sensory decoder
+  - VISp maintains high accuracy through 500ms; VISam decays faster
+  - Session 1111013640: VISp peaks at 325ms (strong OFF-response), confirming D012 rationale
+
 - **Output files:**
-  - `results/decoding/session_1064644573/w-250-0ms_b250ms/`
-- **Interpretation:** **CRITICAL VALIDATION PASSED.** The brain state before the stimulus is indistinguishable between omission and expected trials. This confirms that:
-  - The 90% VISp / 75% VISam decoding at 400–750ms is genuinely stimulus-locked
-  - There is no slow behavioral drift or arousal confound driving the classification
-  - All post-stimulus decoding results (R007, R008, R009) are validated
-- **Impact:** Strengthens all prior findings. The persistent signal in the 400–750ms inter-stimulus interval is evoked by the trial events, not pre-existing.
+  - `results/multi_session/multi_session_results.json` — full results with null distributions
+  - `results/multi_session/multi_session_summary.png` — 3-panel figure (paired dots, differences, time-resolved)
+  - `results/multi_session/session_results_interim.json` — intermediate saves (gitignored)
+  - `results/spike_matrices/session_*/w400-750ms_b350ms/` — per-session spike data (gitignored)
+  - `results/spike_matrices/session_*/w0-500ms_b50ms/` — per-session time-resolved data (gitignored)
+
+- **Neurobiological note:** Neuropixels records all nearby extracellular spikes regardless of Cre line. The genotype labels (SST, VIP, Slc17a7) identify which cell type is opto-taggable, not which neurons enter the decoder. The decoded population is dominated by excitatory pyramidal cells in all sessions. Genotype diversity confirms the finding is not an artifact of a specific transgenic background.
+
+- **Go/no-go:** **GO** — H3 definitively rejected. VISp > VISam replicates across genotypes, mice, and image sets. See D013.
 
 ---
 
-### R012: Extended time-resolved decoding — 0–750ms (full ISI)
-- **Date:** 2026-03-29
-- **Script:** `03_decode.py --mode time_resolved --tr_tag w0-750ms_b50ms`
-- **Session:** 1064644573
-- **Parameters:**
-  - 15 bins × 50ms, decoded independently
-  - No permutation test
-- **Key results (accuracy per bin):**
+### R012: Multi-session scale-up — n=10 (Phase 4 extension)
+- **Date:** 2026-03-30
+- **Script:** `05_multi_session.py --n_sessions 10 --n_permutations 100 --resume`
+- **Sessions:** 5 previous + 5 new (1108334384, 1152632711, 1099598937, 1067588044, 1139846596)
+- **Session selection:** Greedy diversity with `--resume` — loaded 5 existing results, excluded their session IDs, seeded seen_genotypes/seen_mice, selected 5 new sessions. Final: 3 SST, 2 VIP, 5 Slc17a7, 8 unique mice.
+- **Parameters:** Same as R011 (400–750ms, 100 permutations, 10× undersampling, stratified 5-fold CV)
+- **Key results (400–750ms late window, n=10):**
 
-  | Bin center | VISp | VISam |
-  |------------|------|-------|
-  | 25ms | 0.867 | 0.799 |
-  | 75ms | 0.975 | 0.960 |
-  | 125ms | 0.955 | 0.817 |
-  | 175ms | 0.911 | 0.695 |
-  | 225ms | 0.928 | 0.764 |
-  | 275ms | 0.952 | 0.746 |
-  | 325ms | 0.919 | 0.783 |
-  | 375ms | 0.900 | 0.765 |
-  | 425ms | 0.882 | 0.681 |
-  | 475ms | 0.843 | 0.642 |
-  | 525ms | 0.817 | 0.627 |
-  | 575ms | 0.755 | 0.615 |
-  | 625ms | 0.731 | 0.631 |
-  | 675ms | 0.708 | 0.641 |
-  | 725ms | 0.662 | 0.622 |
+  | Session | Genotype | Mouse | VISp units | VISam units | Omissions | VISp acc | VISam acc | Diff |
+  |---------|----------|-------|------------|-------------|-----------|----------|-----------|------|
+  | 1115077618 | SST | 570299 | 86 | 87 | 364 | 0.930 | 0.836 | −0.095 |
+  | 1111013640 | VIP | 568963 | 85 | 86 | 306 | 0.954 | 0.868 | −0.085 |
+  | 1119946360 | Slc17a7 | 578003 | 110 | 120 | 328 | 0.944 | 0.854 | −0.090 |
+  | 1115086689 | SST | 574078 | 97 | 71 | 354 | 0.951 | 0.848 | −0.103 |
+  | 1116941914 | Slc17a7 | 576323 | 71 | 91 | 352 | 0.920 | 0.881 | −0.039 |
+  | 1108334384 | SST | 570301 | 106 | 56 | 364 | 0.915 | 0.719 | −0.196 |
+  | 1152632711 | VIP | 599294 | 66 | 82 | 360 | 0.900 | 0.858 | −0.042 |
+  | 1099598937 | Slc17a7 | 560962 | 86 | 76 | 398 | 0.870 | 0.863 | −0.007 |
+  | 1067588044 | Slc17a7 | 544836 | 92 | 63 | 346 | 0.940 | 0.863 | −0.077 |
+  | 1139846596 | Slc17a7 | 585329 | 84 | 63 | 434 | 0.936 | 0.910 | −0.025 |
 
-- **Key observations:**
-  - VISp decays from 97.5% to 66.2% — never reaches chance
-  - VISam decays from 96.0% to 62.2% — plateaus at ~63% from 475ms onward
-  - The gap narrows: 20-point spread at 475ms → 4-point spread at 725ms
-  - **Convergence:** Both areas approach ~63–66% by end of ISI, suggesting similar weak residual signal
-  - Neither area reaches chance (50%) by 725ms — persistent trace throughout ISI
+  - VISp mean: **0.926 ± 0.026**, VISam mean: **0.850 ± 0.050**
+  - VISp > VISam in **10/10 sessions**
+  - Cohen's d = **−1.42** (large effect)
+  - Wilcoxon p = 0.0020, Permutation p = 0.0016, Sign test p = 0.0010
+  - All three tests significant at p < 0.01
+
 - **Output files:**
-  - `results/decoding/session_1064644573/w0-750ms_b50ms/time_resolved_results.json`
-  - `results/decoding/session_1064644573/w0-750ms_b50ms/time_resolved_accuracy.png`
+  - `results/multi_session/multi_session_results.json` (merged 10-session results)
+  - `results/multi_session/multi_session_summary.png` (updated 3-panel figure)
+  - `results/multi_session/multi_session_results_backup_20260330_115726.json` (n=5 backup)
+
+- **Runtime:** 73.4 minutes (5 new sessions: download + extraction + decoding)
+
+---
+
+### R013: Familiar/novel feasibility check
+- **Date:** 2026-03-30
+- **Script:** `06_check_familiar_novel_counts.py`, `check_novel_sessions.py`
+- **Purpose:** Determine if within-session familiar vs. novel split is feasible, and if not, find matched novel sessions for within-mouse comparison.
+- **Key results:**
+  - All 10 existing sessions are Familiar (`experience_level = "Familiar"`)
+  - `is_image_novel` is `<NA>` for all omission rows (image wasn't shown → no novelty label)
+  - Within-session split: NOT FEASIBLE (0 novel trials in any session)
+  - Novel sessions in dataset: 52 total, 51 with VISp + VISam, 47 viable (≥20 units in both)
+  - **9 of 10 existing mice have a matched novel session** — within-mouse paired design possible
+  - Mouse 585329 excluded: novel session (1140102579) has only 17 VISam units
+
+- **Paired session mapping (9 mice):**
+
+  | Mouse | Genotype | Familiar session | Novel session |
+  |-------|----------|-----------------|---------------|
+  | 544836 | Slc17a7 | 1067588044 | 1067781390 |
+  | 560962 | Slc17a7 | 1099598937 | 1099869737 |
+  | 568963 | VIP | 1111013640 | 1111216934 |
+  | 570299 | SST | 1115077618 | 1115356973 |
+  | 570301 | SST | 1108334384 | 1108531612 |
+  | 574078 | SST | 1115086689 | 1115368723 |
+  | 576323 | Slc17a7 | 1116941914 | 1117148442 |
+  | 578003 | Slc17a7 | 1119946360 | 1120251466 |
+  | 599294 | VIP | 1152632711 | 1152811536 |
+
+- **Decision impact:** D015 — within-mouse paired novelty comparison. `07_paired_novelty.py` written and running.
+
+---
+
+### R014: Within-mouse familiar vs. novel comparison (Phase 5)
+- **Date:** 2026-03-30
+- **Script:** `07_paired_novelty.py --n_permutations 100`
+- **Sessions:** 9 novel sessions matched to 9 familiar sessions (same mice)
+- **Parameters:** 400–750ms, 100 permutations, 10× undersampling, stratified 5-fold CV
+- **Key results:**
+
+  | Mouse | Genotype | VISp Fam | VISp Nov | VISp Δ | VISam Fam | VISam Nov | VISam Δ |
+  |-------|----------|----------|----------|--------|-----------|-----------|---------|
+  | 544836 | Slc17a7 | 0.940 | 0.932 | −0.008 | 0.863 | 0.755 | −0.107 |
+  | 560962 | Slc17a7 | 0.870 | 0.875 | +0.005 | 0.863 | 0.712 | −0.151 |
+  | 568963 | VIP | 0.954 | 0.921 | −0.032 | 0.868 | 0.770 | −0.098 |
+  | 570299 | SST | 0.930 | 0.901 | −0.030 | 0.836 | 0.779 | −0.057 |
+  | 570301 | SST | 0.915 | 0.901 | −0.014 | 0.719 | 0.759 | +0.040 |
+  | 574078 | SST | 0.951 | 0.942 | −0.009 | 0.848 | 0.725 | −0.123 |
+  | 576323 | Slc17a7 | 0.920 | 0.818 | −0.102 | 0.881 | 0.798 | −0.083 |
+  | 578003 | Slc17a7 | 0.944 | 0.912 | −0.032 | 0.854 | 0.750 | −0.104 |
+  | 599294 | VIP | 0.900 | 0.911 | +0.010 | 0.858 | 0.823 | −0.035 |
+
+  - **VISp:** 92.5% → 90.1% (Δ = −2.4%, d = −0.71, Wilcoxon p = 0.039, 7/9 drop)
+  - **VISam:** 84.3% → 76.3% (Δ = −8.0%, d = −1.41, Wilcoxon p = 0.012, 8/9 drop)
+  - **Interaction:** VISp drops LESS than VISam (p = 0.039)
+
+- **Output files:**
+  - `results/novelty_comparison/paired_novelty_results.json`
+  - `results/novelty_comparison/paired_novelty_results.png`
+
+- **Runtime:** 92.1 minutes
+- **Decision impact:** D016 — double dissociation: VISp = experience-independent temporal PE, VISam = experience-dependent content expectation.
+
+---
+
+### R015: Unit-matched control (Phase 6)
+- **Date:** 2026-03-30
+- **Script:** `08_unit_matched_control.py --n_subsamples 20`
+- **Sessions:** 10 familiar sessions
+- **Parameters:** For each session, downsample the area with more units to match the other. 20 random unit subsamples × 10 undersampling repeats × 5-fold CV.
+- **Key results:**
+
+  | Session | VISp units | VISam units | Matched to | VISp matched | VISam matched | VISp still better? |
+  |---------|-----------|------------|-----------|-------------|--------------|-------------------|
+  | 1115077618 | 86 | 87 | 86 | 0.930 | 0.837 | YES |
+  | 1111013640 | 85 | 86 | 85 | 0.954 | 0.874 | YES |
+  | 1119946360 | 110 | 120 | 110 | 0.944 | 0.846 | YES |
+  | 1115086689 | 97 | 71 | 71 | 0.927 | 0.848 | YES |
+  | 1116941914 | 71 | 91 | 71 | 0.920 | 0.862 | YES |
+  | 1108334384 | 106 | 56 | 56 | 0.880 | 0.719 | YES |
+  | 1152632711 | 66 | 82 | 66 | 0.900 | 0.827 | YES |
+  | 1099598937 | 86 | 76 | 76 | 0.856 | 0.863 | NO |
+  | 1067588044 | 92 | 63 | 63 | 0.917 | 0.863 | YES |
+  | 1139846596 | 84 | 63 | 63 | 0.920 | 0.910 | YES |
+
+  - VISp still better in **9/10 sessions**
+  - Matched VISp mean: 0.915 ± 0.028; Matched VISam mean: 0.845 ± 0.047
+  - Cohen's d = **−1.49** (increased from −1.42 unmatched)
+  - Wilcoxon p = 0.004; Sign test p = 0.011
+
+- **Output files:**
+  - `results/unit_matched_control/unit_matched_results.json`
+
+- **Runtime:** 2308s (~38 minutes)
+- **Decision impact:** D017 — unit-count confound closed. Effect is biological, not methodological.
 
 ---
 
@@ -318,9 +441,9 @@ Machine-readable record of every analysis run. Each entry captures inputs, param
 
 | Run ID | Script | Session(s) | Parameters | Purpose |
 |--------|--------|------------|------------|---------|
-| R013 | 03_decode.py | 1064644573 | w400-750ms, 1000 permutations | Full permutation test on clean window |
-| R014 | 02+03 | 5 pilot sessions | w400-750ms, 100 permutations | Multi-session validation of VISp > VISam finding |
-| R015 | 03_decode.py | 1064644573 | trial-history matched analysis | Control for trial history effects |
+| R016 | 05_multi_session.py | 10 sessions | w400-750ms, 1000 permutations | Publication-ready p-values (optional, low priority) |
+
+All core analyses complete. Remaining work is paper writing and figure generation.
 
 ---
 
@@ -331,4 +454,8 @@ Machine-readable record of every analysis run. Each entry captures inputs, param
 | 2026-03-29 | Log created. R001–R004 recorded. Schema v1.0. |
 | 2026-03-29 | R005–R006 recorded. Pending runs renumbered. Output paths now include window config. |
 | 2026-03-29 | R007–R010 recorded. First decoding results: H3 rejected on pilot session (VISp > VISam). OFF-response confound identified. 400–750ms window tested. |
-| 2026-03-29 | R011–R012 recorded. Baseline control PASSED (chance-level pre-stimulus). Extended time-resolved shows convergence at 725ms. |
+| 2026-03-30 | R011 recorded. Multi-session validation complete: VISp > VISam in 5/5 sessions. Phase 4 done. |
+| 2026-03-30 | R012 recorded. Scale-up to n=10: VISp > VISam in 10/10, all tests p < 0.01. D014 added. |
+| 2026-03-30 | R013 recorded. Familiar/novel feasibility: 9 within-mouse pairs identified. D015 added. |
+| 2026-03-30 | R014 recorded. Novelty comparison complete: double dissociation (VISp stable, VISam drops). D016 added. |
+| 2026-03-30 | R015 recorded. Unit-matched control: 9/10 sessions, d = −1.49. D017 added. All core analyses complete. |

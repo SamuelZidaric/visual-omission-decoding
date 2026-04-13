@@ -18,6 +18,9 @@ Usage:
     # Full run (5 sessions, 1000 permutations)
     python 05_multi_session.py --n_sessions 5 --n_permutations 1000
 
+    # Resume: add sessions to reach n=10 total (loads previous results, runs only new)
+    python 05_multi_session.py --n_sessions 10 --n_permutations 100 --resume
+
     # Specific sessions (skip auto-selection)
     python 05_multi_session.py --session_ids 1064644573 1064646791 1064655940
 
@@ -95,10 +98,58 @@ N_UNDERSAMPLE_REPEATS = 10
 RANDOM_SEED = 42
 
 
+# ── Resume support ──────────────────────────────────────────────────────────
+
+
+def load_previous_results(output_dir):
+    """Load previous multi_session_results.json if it exists.
+
+    Returns:
+        previous_session_results: list of per-session result dicts, or []
+        previous_session_ids: set of session IDs already completed
+    """
+    results_path = Path(output_dir) / "multi_session_results.json"
+    if not results_path.exists():
+        return [], set()
+
+    with open(results_path) as f:
+        data = json.load(f)
+
+    session_results = data.get("session_results", [])
+    completed = [
+        r for r in session_results
+        if r.get("status") == "complete"
+    ]
+    completed_ids = {r["session_id"] for r in completed}
+
+    print(f"\nLoaded {len(completed)} previous results from {results_path}")
+    for r in completed:
+        geno = r.get("genotype_short", "?")
+        mouse = r.get("mouse_id", "?")
+        acc_v = r.get("VISp_accuracy", "?")
+        acc_a = r.get("VISam_accuracy", "?")
+        print(f"  {r['session_id']}  genotype={geno}  mouse={mouse}  "
+              f"VISp={acc_v}  VISam={acc_a}")
+
+    return completed, completed_ids
+
+
+def backup_previous_results(output_dir):
+    """Create a timestamped backup of existing results before overwriting."""
+    results_path = Path(output_dir) / "multi_session_results.json"
+    if results_path.exists():
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = results_path.with_name(f"multi_session_results_backup_{ts}.json")
+        import shutil
+        shutil.copy2(results_path, backup_path)
+        print(f"Backed up previous results to {backup_path.name}")
+
+
 # ── Session selection ───────────────────────────────────────────────────────
 
 
-def select_sessions(cache, units_table, n_sessions=5, exclude_ids=None):
+def select_sessions(cache, units_table, n_sessions=5, exclude_ids=None,
+                    seen_genotypes_seed=None, seen_mice_seed=None):
     """Select sessions maximizing genotype and mouse diversity.
 
     Strategy:
@@ -110,8 +161,10 @@ def select_sessions(cache, units_table, n_sessions=5, exclude_ids=None):
     Args:
         cache: VBN project cache
         units_table: pre-loaded unit table
-        n_sessions: number of sessions to select
-        exclude_ids: session IDs to skip (e.g., already processed pilot)
+        n_sessions: number of NEW sessions to select
+        exclude_ids: session IDs to skip (e.g., already processed)
+        seen_genotypes_seed: set of genotypes already in the dataset (for diversity)
+        seen_mice_seed: set of mouse_ids already in the dataset (for diversity)
 
     Returns:
         selected: list of dicts with session_id, genotype, mouse_id, unit counts
@@ -188,8 +241,8 @@ def select_sessions(cache, units_table, n_sessions=5, exclude_ids=None):
 
     # Greedy selection: maximize genotype diversity, then mouse diversity
     selected = []
-    seen_genotypes = set()
-    seen_mice = set()
+    seen_genotypes = set(seen_genotypes_seed) if seen_genotypes_seed else set()
+    seen_mice = set(seen_mice_seed) if seen_mice_seed else set()
 
     # Pass 1: one session per genotype (highest unit count as tiebreaker)
     for geno in df["genotype_short"].unique():
@@ -437,6 +490,13 @@ def aggregate_results(session_results):
     observed_mean_diff = np.mean(diffs)
     perm_p = (np.sum(np.abs(perm_means) >= np.abs(observed_mean_diff)) + 1) / (n_perm + 1)
 
+    # One-sided sign test: how likely is it that ALL pairs agree by chance?
+    n_visp_better = int(np.sum(diffs < 0))
+    n_visam_better = int(np.sum(diffs > 0))
+    n_concordant = max(n_visp_better, n_visam_better)
+    sign_test_p = float(stats.binomtest(n_concordant, n, 0.5,
+                                         alternative="greater").pvalue)
+
     summary = {
         "n_sessions": n,
         "VISp_accuracies": visp_accs.tolist(),
@@ -452,8 +512,9 @@ def aggregate_results(session_results):
         "wilcoxon_statistic": float(wilcoxon_stat),
         "wilcoxon_p": float(wilcoxon_p),
         "permutation_p": float(perm_p),
-        "n_VISp_better": int(np.sum(diffs < 0)),
-        "n_VISam_better": int(np.sum(diffs > 0)),
+        "sign_test_p": sign_test_p,
+        "n_VISp_better": n_visp_better,
+        "n_VISam_better": n_visam_better,
         "n_tied": int(np.sum(diffs == 0)),
         "direction": "VISp > VISam" if observed_mean_diff < 0 else "VISam > VISp",
         # Per-session covariate table for reporting
@@ -641,6 +702,12 @@ def main():
         "--dry_run", action="store_true",
         help="Show session selection without processing.",
     )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Resume from previous results: load multi_session_results.json, "
+             "skip already-completed sessions, run only new ones to reach "
+             "--n_sessions total, then merge and re-aggregate.",
+    )
     args = parser.parse_args()
 
     # ── Initialize ──
@@ -654,17 +721,53 @@ def main():
     # ── Session selection ──
     pilot_id = 1064644573
 
-    if args.session_ids:
-        # Manual override
-        selected = [{"session_id": sid} for sid in args.session_ids]
-        print(f"\nUsing {len(selected)} manually specified sessions.")
+    # ── Resume: load previous results ──
+    previous_results = []
+    previous_ids = set()
+    seen_genotypes_seed = set()
+    seen_mice_seed = set()
+
+    if args.resume:
+        previous_results, previous_ids = load_previous_results(args.output_dir)
+        if previous_results:
+            # Seed diversity tracking with already-completed sessions
+            for r in previous_results:
+                g = r.get("genotype_short")
+                m = r.get("mouse_id")
+                if g:
+                    seen_genotypes_seed.add(g)
+                if m:
+                    seen_mice_seed.add(m)
+            n_needed = max(0, args.n_sessions - len(previous_results))
+            print(f"\nResume mode: {len(previous_results)} existing + {n_needed} new "
+                  f"= {args.n_sessions} total target")
+            if n_needed == 0:
+                print("Already at target. Re-aggregating with current results...")
+        else:
+            n_needed = args.n_sessions
+            print("\nNo previous results found. Running full selection.")
     else:
-        exclude = {pilot_id} if args.exclude_pilot else set()
+        n_needed = args.n_sessions
+
+    if args.session_ids:
+        # Manual override — filter out already-completed if resuming
+        manual_ids = [sid for sid in args.session_ids if sid not in previous_ids]
+        selected = [{"session_id": sid} for sid in manual_ids]
+        print(f"\nUsing {len(selected)} manually specified sessions"
+              f" ({len(args.session_ids) - len(manual_ids)} already completed, skipped).")
+    elif n_needed > 0:
+        exclude = previous_ids.copy()
+        if args.exclude_pilot:
+            exclude.add(pilot_id)
         selected = select_sessions(
             cache, units_table,
-            n_sessions=args.n_sessions,
+            n_sessions=n_needed,
             exclude_ids=exclude,
+            seen_genotypes_seed=seen_genotypes_seed,
+            seen_mice_seed=seen_mice_seed,
         )
+    else:
+        selected = []
 
     print(f"\n{'='*60}")
     print(f"SELECTED SESSIONS ({len(selected)})")
@@ -681,17 +784,21 @@ def main():
         print("\n[DRY RUN] Stopping here.")
         return
 
-    # ── Process sessions ──
+    # ── Process new sessions ──
     os.makedirs(args.output_dir, exist_ok=True)
     os.makedirs(args.spike_dir, exist_ok=True)
 
-    all_results = []
+    # Back up previous results before overwriting
+    if args.resume and previous_results:
+        backup_previous_results(args.output_dir)
+
+    new_results = []
     total_t0 = time.time()
 
     for i, s in enumerate(selected):
         sid = s["session_id"]
         print(f"\n{'='*60}")
-        print(f"SESSION {i+1}/{len(selected)}: {sid}")
+        print(f"NEW SESSION {i+1}/{len(selected)}: {sid}")
         print(f"{'='*60}")
 
         result = run_session_pipeline(
@@ -704,15 +811,19 @@ def main():
 
         # Add selection metadata
         result.update({k: v for k, v in s.items() if k != "session_id"})
-        all_results.append(result)
+        new_results.append(result)
 
-        # Save intermediate results after each session
+        # Save intermediate results (new only) after each session
         interim_path = Path(args.output_dir) / "session_results_interim.json"
         with open(interim_path, "w") as f:
-            json.dump(all_results, f, indent=2, default=str)
+            json.dump(new_results, f, indent=2, default=str)
+
+    # ── Merge previous + new results ──
+    all_results = list(previous_results) + new_results
 
     # ── Include pilot if requested ──
-    if args.include_pilot and pilot_id not in [s["session_id"] for s in selected]:
+    all_session_ids = {r["session_id"] for r in all_results}
+    if args.include_pilot and pilot_id not in all_session_ids:
         pilot_late = Path(args.spike_dir) / f"session_{pilot_id}" / LATE_TAG
         if pilot_late.exists():
             print(f"\nIncluding pilot session {pilot_id} in aggregation...")
@@ -745,10 +856,11 @@ def main():
         print(f"VISam mean accuracy: {summary['mean_VISam']:.3f} ± {summary['std_VISam']:.3f}")
         print(f"Mean difference (VISam − VISp): {summary['mean_difference']:+.3f}")
         print(f"Direction: {summary['direction']}")
-        print(f"VISp better in {summary['n_VISp_better']}/{summary['n_sessions']} sessions")
         print(f"Cohen's d: {summary['cohens_d']:.2f}")
         print(f"Wilcoxon p: {summary['wilcoxon_p']:.4f}")
         print(f"Permutation p: {summary['permutation_p']:.4f}")
+        print(f"Sign test p: {summary['sign_test_p']:.4f}")
+        print(f"VISp better in {summary['n_VISp_better']}/{summary['n_sessions']} sessions")
 
     # ── Save ──
     output = {
@@ -779,19 +891,35 @@ def main():
 
     # ── Print conclusion ──
     print(f"\n{'='*60}")
-    print(f"CONCLUSION")
+    print(f"CONCLUSION (n={summary['n_sessions']} sessions)")
     print(f"{'='*60}")
     if summary.get("warning"):
         print(f"Insufficient data for conclusion ({summary['warning']})")
     else:
-        if summary["permutation_p"] < 0.05:
-            print(f"Significant area difference (permutation p={summary['permutation_p']:.4f})")
-            print(f"Direction: {summary['direction']}")
-        else:
-            print(f"No significant area difference (permutation p={summary['permutation_p']:.4f})")
+        print(f"Direction: {summary['direction']}")
         print(f"Effect size (Cohen's d): {summary['cohens_d']:.2f}")
+        print(f"Wilcoxon signed-rank p: {summary['wilcoxon_p']:.4f}")
+        print(f"Permutation (sign-flip) p: {summary['permutation_p']:.4f}")
+        print(f"One-sided sign test p: {summary['sign_test_p']:.4f}")
+        print(f"Concordance: VISp better in {summary['n_VISp_better']}/{summary['n_sessions']}")
 
-    print(f"\nTotal runtime: {total_elapsed/60:.1f} minutes")
+        # Highlight which tests pass significance
+        sig_tests = []
+        if summary["wilcoxon_p"] < 0.05:
+            sig_tests.append("Wilcoxon")
+        if summary["permutation_p"] < 0.05:
+            sig_tests.append("Permutation")
+        if summary["sign_test_p"] < 0.05:
+            sig_tests.append("Sign test")
+        if sig_tests:
+            print(f"Significant at p<0.05: {', '.join(sig_tests)}")
+        else:
+            print(f"No test reaches p<0.05 (but see effect size and concordance)")
+
+    n_prev = len(previous_results) if args.resume else 0
+    n_new = len([r for r in new_results if r.get("status") == "complete"]) if selected else 0
+    print(f"\nSessions: {n_prev} previous + {n_new} new = {summary['n_sessions']} total")
+    print(f"Total runtime: {total_elapsed/60:.1f} minutes")
 
 
 if __name__ == "__main__":
